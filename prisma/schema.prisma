@@ -1,0 +1,763 @@
+// SimpleLawCeylon - Prisma schema
+// Mirrors schema.sql (39 tables). The SQL migration in prisma/migrations is the
+// source of truth for CHECK constraints, row-level security, extensions and
+// full-text / trigram indexes, which Prisma cannot express (DB-01, DB-04, DB-10).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// TIER 1 - FOUNDATION
+// =========================================================
+
+model Plan {
+  id            BigInt   @id @default(autoincrement())
+  name          String
+  priceLkr      Decimal  @map("price_lkr") @db.Decimal(12, 2)
+  billingPeriod String   @map("billing_period") // 'monthly' | 'yearly'
+  maxUsers      Int      @default(1) @map("max_users")
+  isActive      Boolean  @default(true) @map("is_active")
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Firm {
+  id             BigInt   @id @default(autoincrement())
+  name           String
+  address        String?
+  phone          String?
+  email          String?
+  logoUrl        String?  @map("logo_url")
+  taxName        String?  @map("tax_name")
+  taxRatePercent Decimal  @default(0) @map("tax_rate_percent") @db.Decimal(5, 2)
+  status         String   @default("active") // 'active' | 'inactive' | 'read_only'
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  users              User[]
+  rolePermissions    RolePermission[]
+  auditLogs          AuditLog[]
+  driveConnection    DriveConnection?
+  counters           FirmCounter[]
+  subscriptions      Subscription[]
+  courts             Court[]
+  caseTypes          CaseType[]
+  caseStatuses       CaseStatus[]
+  documentTemplates  DocumentTemplate[]
+  clients            Client[]
+  cases              Case[]
+  caseParties        CaseParty[]
+  caseEvents         CaseEvent[]
+  hearings           Hearing[]
+  tasks              Task[]
+  deeds              Deed[]
+  documents          Document[]
+  reminders          Reminder[]
+  timeEntries        TimeEntry[]
+  expenses           Expense[]
+  invoices           Invoice[]
+  payments           Payment[]
+  trustTransactions  TrustTransaction[]
+
+  @@map("firms")
+}
+
+model User {
+  id               BigInt    @id @default(autoincrement())
+  firmId           BigInt?   @map("firm_id")
+  role             String // platform_admin | firm_owner | partner | junior | clerk | accountant
+  fullName         String    @map("full_name")
+  email            String    @unique
+  phone            String?
+  passwordHash     String    @map("password_hash")
+  twoFaEnabled     Boolean   @default(true) @map("two_fa_enabled")
+  isActive         Boolean   @default(true) @map("is_active")
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until") @db.Timestamptz
+  lastLoginAt      DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  firm                Firm?                @relation(fields: [firmId], references: [id])
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  loginOtps           LoginOtp[]
+  auditLogs           AuditLog[]
+  driveConnections    DriveConnection[]
+  clientsCreated      Client[]             @relation("ClientCreatedBy")
+  casesLead           Case[]               @relation("CaseLeadLawyer")
+  casesCreated        Case[]               @relation("CaseCreatedBy")
+  caseStaff           CaseStaff[]
+  caseEvents          CaseEvent[]
+  hearingsAssigned    Hearing[]
+  tasksAssigned       Task[]               @relation("TaskAssignedTo")
+  tasksCreated        Task[]               @relation("TaskCreatedBy")
+  deedsCreated        Deed[]
+  documentsUploaded   Document[]
+  reminders           Reminder[]
+  timeEntries         TimeEntry[]
+  expensesCreated     Expense[]
+  invoicesCreated     Invoice[]
+  paymentsRecorded    Payment[]
+  trustRecorded       TrustTransaction[]
+
+  @@map("users")
+}
+
+model Session {
+  id         BigInt    @id @default(autoincrement())
+  userId     BigInt    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        BigInt    @id @default(autoincrement())
+  userId    BigInt    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("password_reset_tokens")
+}
+
+model RolePermission {
+  firmId     BigInt @map("firm_id")
+  role       String // partner | junior | clerk | accountant
+  permission String
+
+  firm Firm @relation(fields: [firmId], references: [id])
+
+  @@id([firmId, role, permission])
+  @@map("role_permissions")
+}
+
+model LoginOtp {
+  id        BigInt    @id @default(autoincrement())
+  userId    BigInt    @map("user_id")
+  codeHash  String    @map("code_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("login_otps")
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  firmId    BigInt?  @map("firm_id")
+  userId    BigInt?  @map("user_id")
+  action    String // create | update | delete | login | login_failed | export | print
+  entity    String
+  entityId  BigInt?  @map("entity_id")
+  changes   Json?
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  firm Firm? @relation(fields: [firmId], references: [id])
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([firmId, createdAt(sort: Desc)], map: "audit_logs_firm_idx")
+  @@map("audit_logs")
+}
+
+model DriveConnection {
+  firmId                BigInt   @id @map("firm_id")
+  googleEmail           String   @map("google_email")
+  refreshTokenEncrypted String   @map("refresh_token_encrypted")
+  rootFolderId          String   @map("root_folder_id")
+  deedsFolderId         String?  @map("deeds_folder_id")
+  status                String   @default("connected") // connected | disconnected | error
+  connectedBy           BigInt?  @map("connected_by")
+  connectedAt           DateTime @default(now()) @map("connected_at") @db.Timestamptz
+
+  firm          Firm  @relation(fields: [firmId], references: [id])
+  connectedUser User? @relation(fields: [connectedBy], references: [id])
+
+  @@map("drive_connections")
+}
+
+model FirmCounter {
+  firmId     BigInt @map("firm_id")
+  counterKey String @map("counter_key") // deed | invoice | receipt
+  year       Int
+  lastValue  Int    @default(0) @map("last_value")
+
+  firm Firm @relation(fields: [firmId], references: [id])
+
+  @@id([firmId, counterKey, year])
+  @@map("firm_counters")
+}
+
+// =========================================================
+// TIER 2 - ADMIN MASTER DATA
+// =========================================================
+
+model Subscription {
+  id       BigInt   @id @default(autoincrement())
+  firmId   BigInt   @map("firm_id")
+  planId   BigInt   @map("plan_id")
+  priceLkr Decimal? @map("price_lkr") @db.Decimal(12, 2)
+  maxUsers Int?     @map("max_users")
+  startsOn DateTime @map("starts_on") @db.Date
+  endsOn   DateTime @map("ends_on") @db.Date
+  status   String   @default("active") // active | expired | cancelled
+
+  firm     Firm                  @relation(fields: [firmId], references: [id])
+  plan     Plan                  @relation(fields: [planId], references: [id])
+  payments SubscriptionPayment[]
+
+  @@map("subscriptions")
+}
+
+model SubscriptionPayment {
+  id             BigInt   @id @default(autoincrement())
+  subscriptionId BigInt   @map("subscription_id")
+  amountLkr      Decimal  @map("amount_lkr") @db.Decimal(12, 2)
+  method         String?
+  reference      String?
+  paidAt         DateTime @default(now()) @map("paid_at") @db.Timestamptz
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@map("subscription_payments")
+}
+
+model Law {
+  id        BigInt  @id @default(autoincrement())
+  title     String
+  actNumber String? @map("act_number")
+  year      Int?
+  category  String?
+  summary   String?
+  sourceUrl String? @map("source_url")
+  isActive  Boolean @default(true) @map("is_active")
+
+  sections LawSection[]
+  caseLaws CaseLaw[]
+
+  @@map("laws")
+}
+
+model LawSection {
+  id            BigInt  @id @default(autoincrement())
+  lawId         BigInt  @map("law_id")
+  sectionNumber String  @map("section_number")
+  heading       String?
+  body          String?
+
+  law      Law       @relation(fields: [lawId], references: [id], onDelete: Cascade)
+  caseLaws CaseLaw[]
+
+  @@index([lawId], map: "law_sections_law_idx")
+  @@map("law_sections")
+}
+
+model Court {
+  id        BigInt  @id @default(autoincrement())
+  firmId    BigInt? @map("firm_id")
+  name      String
+  courtType String? @map("court_type")
+  city      String?
+  address   String?
+
+  firm     Firm?     @relation(fields: [firmId], references: [id])
+  cases    Case[]
+  hearings Hearing[]
+
+  @@map("courts")
+}
+
+model CaseType {
+  id     BigInt  @id @default(autoincrement())
+  firmId BigInt? @map("firm_id")
+  name   String
+
+  firm  Firm?  @relation(fields: [firmId], references: [id])
+  cases Case[]
+
+  @@map("case_types")
+}
+
+model CaseStatus {
+  id        BigInt  @id @default(autoincrement())
+  firmId    BigInt? @map("firm_id")
+  name      String
+  isClosed  Boolean @default(false) @map("is_closed")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  firm  Firm?  @relation(fields: [firmId], references: [id])
+  cases Case[]
+
+  @@map("case_statuses")
+}
+
+model DocumentTemplate {
+  id       BigInt  @id @default(autoincrement())
+  firmId   BigInt? @map("firm_id")
+  name     String
+  language String  @default("en") // en | si | ta
+  body     String
+
+  firm      Firm?      @relation(fields: [firmId], references: [id])
+  documents Document[]
+
+  @@map("document_templates")
+}
+
+// =========================================================
+// TIER 3 - CORE RECORDS
+// =========================================================
+
+model Client {
+  id            BigInt   @id @default(autoincrement())
+  firmId        BigInt   @map("firm_id")
+  clientType    String   @default("individual") @map("client_type") // individual | company
+  fullName      String   @map("full_name")
+  nicEncrypted  String?  @map("nic_encrypted")
+  nicHash       String?  @map("nic_hash")
+  phone         String?
+  email         String?
+  address       String?
+  notes         String?
+  portalEnabled Boolean  @default(false) @map("portal_enabled")
+  driveFolderId String?  @map("drive_folder_id")
+  createdBy     BigInt?  @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  firm              Firm               @relation(fields: [firmId], references: [id])
+  creator           User?              @relation("ClientCreatedBy", fields: [createdBy], references: [id])
+  cases             Case[]
+  tasks             Task[]
+  deeds             Deed[]
+  documents         Document[]
+  invoices          Invoice[]
+  trustTransactions TrustTransaction[]
+
+  @@index([firmId, fullName], map: "clients_firm_name_idx")
+  @@index([firmId, nicHash], map: "clients_firm_nic_idx")
+  @@map("clients")
+}
+
+model Case {
+  id            BigInt    @id @default(autoincrement())
+  firmId        BigInt    @map("firm_id")
+  clientId      BigInt    @map("client_id")
+  caseNumber    String?   @map("case_number")
+  title         String
+  courtId       BigInt?   @map("court_id")
+  caseTypeId    BigInt?   @map("case_type_id")
+  statusId      BigInt?   @map("status_id")
+  leadLawyerId  BigInt?   @map("lead_lawyer_id")
+  filedOn       DateTime? @map("filed_on") @db.Date
+  closedOn      DateTime? @map("closed_on") @db.Date
+  description   String?
+  driveFolderId String?   @map("drive_folder_id")
+  createdBy     BigInt?   @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  firm              Firm               @relation(fields: [firmId], references: [id])
+  client            Client             @relation(fields: [clientId], references: [id])
+  court             Court?             @relation(fields: [courtId], references: [id])
+  caseType          CaseType?          @relation(fields: [caseTypeId], references: [id])
+  status            CaseStatus?        @relation(fields: [statusId], references: [id])
+  leadLawyer        User?              @relation("CaseLeadLawyer", fields: [leadLawyerId], references: [id])
+  creator           User?              @relation("CaseCreatedBy", fields: [createdBy], references: [id])
+  parties           CaseParty[]
+  staff             CaseStaff[]
+  laws              CaseLaw[]
+  events            CaseEvent[]
+  hearings          Hearing[]
+  tasks             Task[]
+  documents         Document[]
+  timeEntries       TimeEntry[]
+  expenses          Expense[]
+  invoices          Invoice[]
+  trustTransactions TrustTransaction[]
+
+  @@index([firmId, clientId], map: "cases_firm_client_idx")
+  @@map("cases")
+}
+
+model CaseParty {
+  id        BigInt  @id @default(autoincrement())
+  firmId    BigInt  @map("firm_id")
+  caseId    BigInt  @map("case_id")
+  partyRole String  @map("party_role") // plaintiff | defendant | witness | opposing_counsel
+  fullName  String  @map("full_name")
+  nicHash   String? @map("nic_hash")
+  contact   String?
+
+  firm Firm @relation(fields: [firmId], references: [id])
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([firmId, fullName], map: "case_parties_firm_name_idx")
+  @@map("case_parties")
+}
+
+model CaseStaff {
+  caseId BigInt @map("case_id")
+  userId BigInt @map("user_id")
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([caseId, userId])
+  @@map("case_staff")
+}
+
+model CaseLaw {
+  id           BigInt  @id @default(autoincrement())
+  caseId       BigInt  @map("case_id")
+  lawId        BigInt  @map("law_id")
+  lawSectionId BigInt? @map("law_section_id")
+  note         String?
+
+  case    Case        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  law     Law         @relation(fields: [lawId], references: [id])
+  section LawSection? @relation(fields: [lawSectionId], references: [id])
+
+  @@map("case_laws")
+}
+
+model CaseEvent {
+  id          BigInt   @id @default(autoincrement())
+  firmId      BigInt   @map("firm_id")
+  caseId      BigInt   @map("case_id")
+  eventType   String   @map("event_type") // note | status_change | hearing | document | payment
+  description String
+  createdBy   BigInt?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  firm    Firm  @relation(fields: [firmId], references: [id])
+  case    Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  creator User? @relation(fields: [createdBy], references: [id])
+
+  @@index([caseId, createdAt(sort: Desc)], map: "case_events_case_idx")
+  @@map("case_events")
+}
+
+// =========================================================
+// TIER 4 - DAILY WORK
+// =========================================================
+
+model Hearing {
+  id            BigInt    @id @default(autoincrement())
+  firmId        BigInt    @map("firm_id")
+  caseId        BigInt    @map("case_id")
+  courtId       BigInt?   @map("court_id")
+  startsAt      DateTime  @map("starts_at") @db.Timestamptz
+  endsAt        DateTime? @map("ends_at") @db.Timestamptz
+  location      String?
+  purpose       String? // trial | calling | inquiry | order
+  assignedTo    BigInt?   @map("assigned_to")
+  outcome       String?
+  nextHearingId BigInt?   @map("next_hearing_id")
+  status        String    @default("scheduled") // scheduled | done | postponed | cancelled
+
+  firm        Firm       @relation(fields: [firmId], references: [id])
+  case        Case       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  court       Court?     @relation(fields: [courtId], references: [id])
+  assignee    User?      @relation(fields: [assignedTo], references: [id])
+  nextHearing Hearing?   @relation("NextHearing", fields: [nextHearingId], references: [id])
+  previous    Hearing[]  @relation("NextHearing")
+  reminders   Reminder[]
+
+  @@index([firmId, startsAt], map: "hearings_firm_date_idx")
+  @@map("hearings")
+}
+
+model Task {
+  id         BigInt    @id @default(autoincrement())
+  firmId     BigInt    @map("firm_id")
+  caseId     BigInt?   @map("case_id")
+  clientId   BigInt?   @map("client_id")
+  title      String
+  details    String?
+  taskType   String    @default("task") @map("task_type") // task | appointment | deadline
+  startsAt   DateTime? @map("starts_at") @db.Timestamptz
+  dueAt      DateTime? @map("due_at") @db.Timestamptz
+  location   String?
+  assignedTo BigInt?   @map("assigned_to")
+  status     String    @default("open") // open | done | cancelled
+  createdBy  BigInt?   @map("created_by")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  firm      Firm       @relation(fields: [firmId], references: [id])
+  case      Case?      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client    Client?    @relation(fields: [clientId], references: [id])
+  assignee  User?      @relation("TaskAssignedTo", fields: [assignedTo], references: [id])
+  creator   User?      @relation("TaskCreatedBy", fields: [createdBy], references: [id])
+  reminders Reminder[]
+
+  @@index([firmId, status, dueAt], map: "tasks_firm_due_idx")
+  @@map("tasks")
+}
+
+model Deed {
+  id                  BigInt    @id @default(autoincrement())
+  firmId              BigInt    @map("firm_id")
+  deedNumber          String    @map("deed_number")
+  deedType            String    @map("deed_type")
+  deedDate            DateTime  @map("deed_date") @db.Date
+  clientId            BigInt?   @map("client_id")
+  propertyDescription String?   @map("property_description")
+  propertyLocation    String?   @map("property_location")
+  extent              String?
+  considerationLkr    Decimal?  @map("consideration_lkr") @db.Decimal(14, 2)
+  landRegistry        String?   @map("land_registry")
+  registryReminderAt  DateTime? @map("registry_reminder_at") @db.Timestamptz
+  registryStatus      String    @default("pending") @map("registry_status") // pending | submitted | registered
+  notes               String?
+  createdBy           BigInt?   @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  firm      Firm        @relation(fields: [firmId], references: [id])
+  client    Client?     @relation(fields: [clientId], references: [id])
+  creator   User?       @relation(fields: [createdBy], references: [id])
+  parties   DeedParty[]
+  documents Document[]
+  reminders Reminder[]
+
+  @@unique([firmId, deedNumber])
+  @@map("deeds")
+}
+
+model DeedParty {
+  id        BigInt  @id @default(autoincrement())
+  deedId    BigInt  @map("deed_id")
+  partyRole String  @map("party_role") // vendor | purchaser | donor | donee | witness
+  fullName  String  @map("full_name")
+  nicHash   String? @map("nic_hash")
+  address   String?
+
+  deed Deed @relation(fields: [deedId], references: [id], onDelete: Cascade)
+
+  @@map("deed_parties")
+}
+
+model Document {
+  id          BigInt   @id @default(autoincrement())
+  firmId      BigInt   @map("firm_id")
+  clientId    BigInt?  @map("client_id")
+  caseId      BigInt?  @map("case_id")
+  deedId      BigInt?  @map("deed_id")
+  templateId  BigInt?  @map("template_id")
+  fileName    String   @map("file_name")
+  mimeType    String?  @map("mime_type")
+  driveFileId String   @map("drive_file_id")
+  driveStatus String   @default("ok") @map("drive_status") // ok | missing
+  uploadedBy  BigInt?  @map("uploaded_by")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz
+
+  firm     Firm              @relation(fields: [firmId], references: [id])
+  client   Client?           @relation(fields: [clientId], references: [id])
+  case     Case?             @relation(fields: [caseId], references: [id])
+  deed     Deed?             @relation(fields: [deedId], references: [id])
+  template DocumentTemplate? @relation(fields: [templateId], references: [id])
+  uploader User?             @relation(fields: [uploadedBy], references: [id])
+
+  @@index([firmId, caseId], map: "documents_case_idx")
+  @@map("documents")
+}
+
+model Reminder {
+  id        BigInt    @id @default(autoincrement())
+  firmId    BigInt    @map("firm_id")
+  userId    BigInt    @map("user_id")
+  hearingId BigInt?   @map("hearing_id")
+  taskId    BigInt?   @map("task_id")
+  deedId    BigInt?   @map("deed_id")
+  remindAt  DateTime  @map("remind_at") @db.Timestamptz
+  channel   String    @default("email") // email | sms
+  message   String?
+  sentAt    DateTime? @map("sent_at") @db.Timestamptz
+
+  firm    Firm     @relation(fields: [firmId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
+  hearing Hearing? @relation(fields: [hearingId], references: [id], onDelete: Cascade)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  deed    Deed?    @relation(fields: [deedId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+model TimeEntry {
+  id            BigInt   @id @default(autoincrement())
+  firmId        BigInt   @map("firm_id")
+  caseId        BigInt   @map("case_id")
+  userId        BigInt   @map("user_id")
+  workDate      DateTime @map("work_date") @db.Date
+  minutes       Int
+  rateLkr       Decimal  @default(0) @map("rate_lkr") @db.Decimal(12, 2)
+  description   String?
+  invoiceItemId BigInt?  @map("invoice_item_id")
+
+  firm        Firm         @relation(fields: [firmId], references: [id])
+  case        Case         @relation(fields: [caseId], references: [id])
+  user        User         @relation(fields: [userId], references: [id])
+  invoiceItem InvoiceItem? @relation(fields: [invoiceItemId], references: [id])
+
+  @@map("time_entries")
+}
+
+model Expense {
+  id            BigInt   @id @default(autoincrement())
+  firmId        BigInt   @map("firm_id")
+  caseId        BigInt?  @map("case_id")
+  expenseDate   DateTime @map("expense_date") @db.Date
+  category      String?
+  amountLkr     Decimal  @map("amount_lkr") @db.Decimal(12, 2)
+  description   String?
+  billable      Boolean  @default(true)
+  invoiceItemId BigInt?  @map("invoice_item_id")
+  createdBy     BigInt?  @map("created_by")
+
+  firm        Firm         @relation(fields: [firmId], references: [id])
+  case        Case?        @relation(fields: [caseId], references: [id])
+  invoiceItem InvoiceItem? @relation(fields: [invoiceItemId], references: [id])
+  creator     User?        @relation(fields: [createdBy], references: [id])
+
+  @@map("expenses")
+}
+
+// =========================================================
+// TIER 5 - MONEY
+// =========================================================
+
+model Invoice {
+  id            BigInt   @id @default(autoincrement())
+  firmId        BigInt   @map("firm_id")
+  clientId      BigInt   @map("client_id")
+  caseId        BigInt?  @map("case_id")
+  invoiceNumber String   @map("invoice_number")
+  issueDate     DateTime @map("issue_date") @db.Date
+  dueDate       DateTime @map("due_date") @db.Date
+  subtotalLkr   Decimal  @default(0) @map("subtotal_lkr") @db.Decimal(14, 2)
+  taxLkr        Decimal  @default(0) @map("tax_lkr") @db.Decimal(14, 2)
+  totalLkr      Decimal  @default(0) @map("total_lkr") @db.Decimal(14, 2)
+  paidLkr       Decimal  @default(0) @map("paid_lkr") @db.Decimal(14, 2)
+  status        String   @default("draft") // draft | sent | part_paid | paid | cancelled
+  notes         String?
+  createdBy     BigInt?  @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  firm     Firm          @relation(fields: [firmId], references: [id])
+  client   Client        @relation(fields: [clientId], references: [id])
+  case     Case?         @relation(fields: [caseId], references: [id])
+  creator  User?         @relation(fields: [createdBy], references: [id])
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@unique([firmId, invoiceNumber])
+  @@index([firmId, status, dueDate], map: "invoices_firm_status_idx")
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id           BigInt  @id @default(autoincrement())
+  invoiceId    BigInt  @map("invoice_id")
+  description  String
+  quantity     Decimal @default(1) @db.Decimal(10, 2)
+  unitPriceLkr Decimal @map("unit_price_lkr") @db.Decimal(12, 2)
+  amountLkr    Decimal @map("amount_lkr") @db.Decimal(14, 2)
+
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  timeEntries TimeEntry[]
+  expenses    Expense[]
+
+  @@map("invoice_items")
+}
+
+model Payment {
+  id            BigInt   @id @default(autoincrement())
+  firmId        BigInt   @map("firm_id")
+  invoiceId     BigInt   @map("invoice_id")
+  amountLkr     Decimal  @map("amount_lkr") @db.Decimal(14, 2)
+  receiptNumber String   @map("receipt_number")
+  method        String // cash | cheque | bank_transfer | from_trust
+  reference     String?
+  paidOn        DateTime @map("paid_on") @db.Date
+  recordedBy    BigInt?  @map("recorded_by")
+
+  firm              Firm               @relation(fields: [firmId], references: [id])
+  invoice           Invoice            @relation(fields: [invoiceId], references: [id])
+  recorder          User?              @relation(fields: [recordedBy], references: [id])
+  trustTransactions TrustTransaction[]
+
+  @@unique([firmId, receiptNumber])
+  @@map("payments")
+}
+
+model TrustTransaction {
+  id          BigInt   @id @default(autoincrement())
+  firmId      BigInt   @map("firm_id")
+  clientId    BigInt   @map("client_id")
+  caseId      BigInt?  @map("case_id")
+  txnType     String   @map("txn_type") // deposit | used | refund
+  amountLkr   Decimal  @map("amount_lkr") @db.Decimal(14, 2)
+  paymentId   BigInt?  @map("payment_id")
+  description String?
+  txnDate     DateTime @map("txn_date") @db.Date
+  recordedBy  BigInt?  @map("recorded_by")
+
+  firm     Firm     @relation(fields: [firmId], references: [id])
+  client   Client   @relation(fields: [clientId], references: [id])
+  case     Case?    @relation(fields: [caseId], references: [id])
+  payment  Payment? @relation(fields: [paymentId], references: [id])
+  recorder User?    @relation(fields: [recordedBy], references: [id])
+
+  @@index([firmId, clientId, txnDate], map: "trust_client_idx")
+  @@map("trust_transactions")
+}
+
+// =========================================================
+// PUBLIC HOME PAGE (platform admin)
+// =========================================================
+
+model SiteSlide {
+  id        BigInt  @id @default(autoincrement())
+  imageUrl  String  @map("image_url")
+  caption   String?
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  @@map("site_slides")
+}
+
+model SiteNews {
+  id          BigInt    @id @default(autoincrement())
+  title       String
+  body        String
+  publishedAt DateTime? @map("published_at") @db.Timestamptz
+
+  @@map("site_news")
+}
+
+model ContactMessage {
+  id        BigInt   @id @default(autoincrement())
+  name      String
+  email     String
+  message   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("contact_messages")
+}

@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: simplelaw-db
+    environment:
+      POSTGRES_USER: simplelaw
+      POSTGRES_PASSWORD: simplelaw
+      POSTGRES_DB: simplelaw
+    ports:
+      - "5432:5432"
+    volumes:
+      - simplelaw_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simplelaw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: simplelaw-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://simplelaw:simplelaw@db:5432/simplelaw?schema=public
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["full"]
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: simplelaw-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    profiles: ["full"]
+
+volumes:
+  simplelaw_pgdata:

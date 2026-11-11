@@ -1,0 +1,253 @@
+SimpleLawCeylon: Technical Requirements
+Nov 11, 2026 · @Nimesha Aththanayake
+1. Purpose and scope
+SimpleLawCeylon is a multi-firm web application that lets Sri Lankan law firms manage clients, cases, hearings, documents, deeds and billing in LKR. Each firm pays a subscription and sees only its own data.
+In scope for version one
+•Public home page: slides, about, news, contact form
+•Platform admin: firms, subscriptions, law library, default courts, case types and templates
+•Firm workspace: clients, conflict check, cases, case history, hearing diary, tasks, reminders
+•Documents stored in the firm's own Google Drive, with templates
+•Deed register with auto numbering and Land Registry reminders
+•Time, expenses, invoices, payments and a client money record, all in LKR
+•Printing of client, case and linked law details
+•Audit log, email 2FA and data export
+Out of scope for version one
+•Client portal login (the portal_enabled flag is stored but not used)
+•Online card payment for subscriptions (payments are recorded manually by the admin)
+•Enforcement of notarial or client money rules
+•Native mobile apps (the web app is responsive and installable)
+•SMS reminders (reminders are sent by email only)
+2. Users, roles and permissions
+There are six fixed roles. The platform admin belongs to no firm; every other user belongs to exactly one firm.
+Role	Belongs to	Default access
+Platform admin	Platform	Firms, subscriptions, law library, defaults, home page content. No access to any firm's clients, cases or documents.
+Firm owner	Firm	Everything in the firm, plus firm settings, staff users, role permissions and the Google Drive connection.
+Partner	Firm	All clients, cases, documents, diary, deeds and billing.
+Junior	Firm	Cases assigned to them: view and edit, hearings, tasks, documents. No billing.
+Clerk	Firm	Create and edit clients, hearings, tasks, documents, deeds. No billing, no deletes.
+Accountant	Firm	Time, expenses, invoices, payments, client money record. Read-only case title and client name.
+Rules
+•R-01: Permissions are strings in the form module.action, for example cases.edit or invoices.view.
+•R-02: The firm owner can add or remove permissions for the four staff roles. Changes are stored in role_permissions and apply on the next request.
+•R-03: A new firm is seeded with the defaults in the table above.
+•R-04: Every API route declares the permission it needs. A request without it returns HTTP 403.
+•R-05: The platform admin can set a firm to active, inactive or read-only. Inactive blocks login; read-only blocks every write but allows export.
+•R-06: Case visibility is a permission. A user with cases.view_all sees every case in the firm; without it, only cases where they are lead lawyer or a team member. Defaults: partner, clerk and accountant have it; junior does not. The same scope applies to hearings, tasks, documents and dashboard counts.
+3. Architecture and technology stack
+The system is one repository with a Next.js web app and a NestJS API, both backed by a single PostgreSQL database. Files live in each firm's Google Drive, not on the platform.
+Layer	Choice	Notes
+Frontend	Next.js (React), Tailwind CSS	Responsive from 360 px width; installable as a PWA
+UI library	shadcn/ui, React Hook Form, Zod, TanStack Query	Zod schemas shared with the API
+Calendar	FullCalendar	Month, week, day and time-slot views
+Languages	next-intl	English at launch; Sinhala and Tamil text files ready to add
+Backend	Node.js, NestJS	REST API, one NestJS module per business module
+Database	PostgreSQL 14 or later	Schema in schema.sql, 39 tables
+Data access	Prisma	Models generated from the existing schema
+Background jobs	pg-boss	Reminders, Drive uploads, PDF generation
+File storage	Google Drive API	One connected Drive per firm
+PDF and print	Puppeteer (HTML to PDF)	Needed for correct Sinhala and Tamil text
+Word templates	docxtemplater	Generates editable .docx from templates
+Email	Any SMTP provider, set through environment variables	OTP codes and reminders
+Hosting	Docker containers, server in Singapore or Mumbai	Daily database backup
+Repository layout
+•apps/web: Next.js app (public site, admin area, firm workspace)
+•apps/api: NestJS API and job workers
+•packages/shared: Zod schemas, permission names, TypeScript types
+•prisma/: Prisma schema and migrations
+Request path: browser → Next.js → NestJS API → PostgreSQL. The API alone talks to Google Drive and the email provider. The browser never receives a Google token.
+4. Functional requirements: platform and admin
+4.1 Public home page
+•PUB-01: Show a header, image slider, about section, news list, contact form and footer.
+•PUB-02: Slides and news come from site_slides and site_news; the admin can add, edit, reorder and remove them.
+•PUB-03: The contact form saves to contact_messages and is rate-limited to 5 submissions per IP per hour.
+•PUB-04: Slide images and firm logos are the only files stored on the platform. They go to object storage or a server volume, maximum 2 MB each, JPG or PNG.
+4.2 Login and account security
+•AUTH-01: Login uses email and password. Passwords are hashed with argon2id, minimum 10 characters.
+•AUTH-02: After a correct password, a 6-digit code is emailed. It expires in 10 minutes and is stored hashed in login_otps.
+•AUTH-03: Five wrong passwords or codes lock the account for 15 minutes.
+•AUTH-04: The session is stored in the sessions table and referenced by an httpOnly, Secure, SameSite=Lax cookie, so it can be revoked at once. Idle timeout is 30 minutes; maximum session is 12 hours.
+•AUTH-05: Password reset uses a single-use emailed link valid for 30 minutes.
+•AUTH-06: A deactivated user or a user of an inactive firm cannot log in.
+4.3 Firms and subscriptions
+•ADM-01: The admin can create, edit, activate and deactivate firms, and create the firm owner account.
+•ADM-02: The admin can define plans with name, LKR price, billing period and maximum users.
+•ADM-03: The admin records a subscription and each payment by hand, with method and reference.
+•ADM-04: A daily job sets a firm to read-only 7 days after its subscription end date, and emails the firm owner 14, 7 and 1 days before the end date.
+•ADM-05: A firm cannot create more active users than its plan allows.
+•ADM-06: Plans are fully editable: the admin can add, change, deactivate and delete unused plans at any time. A subscription can override the plan's price and user limit for one firm.
+•ADM-07: Email settings (SMTP host, port, user, password, sender address) are read from environment variables. No provider is hard-coded.
+4.4 Law library
+•LAW-01: The admin can add, edit, deactivate and delete laws with title, act number, year, category, summary and source link.
+•LAW-02: Each law can hold sections with number, heading and text.
+•LAW-03: Firm users can search laws by title, act number, category and section text. Search uses PostgreSQL full-text search.
+•LAW-04: A law linked to any case cannot be deleted, only deactivated.
+•LAW-05: The admin can bulk-import laws and sections from a CSV file, so the full library can be loaded over time.
+•LAW-06: Until real content is entered, a seed script loads sample laws and sections, each titled with the prefix "SAMPLE". The seed runs in development and staging only.
+4.5 Default setup data
+•SET-01: The admin maintains default courts, case types, case statuses and document templates (rows with no firm_id).
+•SET-02: Each firm sees the defaults plus its own rows, and can add, edit and delete only its own.
+•SET-03: A case type, status or court in use by a case cannot be deleted.
+•SET-04: Courts, case types and case statuses are chosen by each firm. On first login the firm owner sees the platform's starter list, ticks the entries to use, and can add their own. Ticked entries are copied into the firm's own rows, which the firm can then edit freely.
+4.6 Audit log and export
+•AUD-01: Every create, update, delete, login, failed login, print and export writes a row to audit_logs with user, time, IP address and changed values.
+•AUD-02: The firm owner can view and filter the firm's log. Log rows cannot be edited or deleted through the application.
+•AUD-03: Sensitive values (passwords, NIC, tokens) are never written to the log.
+•EXP-01: The firm owner can export clients, cases, hearings, deeds, invoices and payments as CSV files in one ZIP download.
+5. Functional requirements: firm modules
+5.1 Dashboard
+•DASH-01: Show today's hearings, overdue tasks, unpaid invoices with total in LKR, and deadlines in the next 7 days.
+•DASH-02: Users without the view-all-cases permission (R-06) see only items for cases assigned to them. The accountant sees only the invoice panel.
+•DASH-03: The dashboard loads with one API call and returns in under 1 second for a firm with 5,000 cases.
+5.2 Clients
+•CLI-01: Create, edit and view clients (individual or company) with name, NIC or registration number, phone, email, address and notes.
+•CLI-02: On save, run a conflict check: search the firm's clients and case parties for the same NIC hash or a similar name (PostgreSQL trigram similarity of 0.6 or higher). Show matches and require the user to confirm before saving.
+•CLI-03: The client page shows all cases, deeds, documents, invoices and the client money balance.
+•CLI-04: A client with cases, deeds or invoices cannot be deleted.
+•CLI-05: Search by name, NIC, phone or case number.
+5.3 Cases
+•CASE-01: Create and edit a case with client, title, court case number, court, case type, status, lead lawyer, team members, filed date and description.
+•CASE-02: Add other parties with role (plaintiff, defendant, witness, opposing counsel). Adding a party runs the conflict check in CLI-02.
+•CASE-03: Link laws and sections to a case, with a note for each.
+•CASE-04: Every status change, hearing outcome, uploaded document and payment adds a row to case_events. Users can also add manual notes. History rows cannot be edited after 24 hours.
+•CASE-05: List cases with filters for status, type, court, lawyer and client, with paging of 25 rows.
+•CASE-06: Closing a case sets closed_on and blocks new hearings and time entries.
+5.4 Hearing diary and tasks
+•HEAR-01: Create a hearing with case, court, date, start and end time, location, purpose and assigned user.
+•HEAR-02: "Add next date" records the outcome of the current hearing, marks it done or postponed, and creates the next hearing in one step.
+•HEAR-03: Warn when the assigned user already has a hearing or appointment that overlaps the time slot.
+•HEAR-04: Calendar views: month, week, day and list, with filters by user and court.
+•TASK-01: Create tasks, appointments and deadlines with title, due date, optional time slot, location, assigned user, and optional case or client.
+•TASK-02: A task past its due date and still open counts as overdue.
+•REM-01: Any hearing, task or deed can have reminders by email at a chosen date and time. A job runs every 5 minutes and sends due reminders once.
+•REM-02: Each hearing gets a default reminder at 6:00 PM the day before, sent to the assigned user.
+5.5 Documents and templates
+•DOC-01: Uploads go to the firm's Google Drive under Firm / Client / Case. The database stores the Drive file ID, file name, type, uploader and time.
+•DOC-02: Maximum upload size is 50 MB. Allowed types: PDF, DOCX, XLSX, JPG, PNG.
+•DOC-03: Uploading a file with the same name to the same case creates a new Drive version, not a second file.
+•DOC-04: Opening a file streams it through the API after a permission check. Drive folders are not shared with staff directly.
+•DOC-05: Generate a document from a template. Placeholders such as {{client.name}}, {{case.number}} and {{court.name}} are filled from the case and saved as a .docx in the case folder.
+•DOC-06: If Drive returns "not found", mark the document as missing and show that on the case.
+•DOC-07: Documents are disabled with a clear message until the firm owner connects Google Drive.
+•DOC-08: The platform ships eight default templates in English: plaint, answer, proxy, affidavit, motion, letter of demand, power of attorney and deed of transfer. Each is a layout with placeholders, not finished legal wording; a lawyer must review the text before use. Firms can copy and edit them. Sinhala and Tamil versions can be added later without code changes.
+5.6 Deed register
+•DEED-01: Create a deed with type, date, client, parties with roles, property description, location, extent, consideration in LKR and Land Registry name.
+•DEED-02: The deed number is generated as YYYY/NNN per firm per year from firm_counters, inside the same database transaction, so two users can never get the same number.
+•DEED-03: The user sets a Land Registry reminder date and time with notes. It creates a reminder for the chosen user.
+•DEED-04: Registry status is pending, submitted or registered. Pending deeds past their reminder date are listed with overdue tasks on the dashboard.
+•DEED-05: Search by deed number, party name, client and date range. Print the register for a date range.
+5.7 Time, expenses and billing
+•BILL-01: Record time entries (case, user, date, minutes, hourly rate) and expenses (case, date, category, amount, billable).
+•BILL-02: Create an invoice for a client by picking unbilled time and expenses, plus free-text lines. Billed entries are locked.
+•BILL-03: Invoice numbers are generated as INV-YYYY-NNN per firm, as in DEED-02.
+•BILL-04: An invoice has subtotal, one tax amount, total, due date and status: draft, sent, part paid, paid or cancelled.
+•BILL-05: Record payments with amount, method, reference and date. Status and paid amount update automatically. A payment cannot exceed the balance due.
+•BILL-06: Client money record: add deposits, uses and refunds per client. Show the running balance. Paying an invoice "from client money" creates both a payment and a "used" row.
+•BILL-07: All amounts are LKR with 2 decimal places, stored as numeric, never as floating point.
+•BILL-08: An invoice is overdue when it is past its due date and not fully paid.
+•BILL-09: Tax is a firm setting: a tax name and a rate in percent, off by default. When set, a new invoice's tax is the subtotal times the rate, and the user can change the amount before sending.
+5.8 Printing
+•PRN-01: Print or download as PDF: client profile, case sheet (details, parties, hearings, history, linked laws), a law with its sections, deed register, invoice and receipt.
+•PRN-02: PDFs are A4 with the firm name, logo and address in the header, and the print date and user in the footer.
+•PRN-03: Sinhala and Tamil text must render correctly in PDFs.
+6. Data model rules
+The tables are defined in schema.sql; these rules apply on top of it.
+•DB-01: Every firm-owned table has firm_id. PostgreSQL row-level security restricts each query to the firm set for the current request (SET LOCAL app.firm_id).
+•DB-02: The API also filters by firm_id in code. Row-level security is the second line of defence, not the only one.
+•DB-03: NIC and registration numbers are stored encrypted with AES-256-GCM in nic_encrypted. nic_hash is an HMAC-SHA256 of the normalised value, used for exact search and the conflict check.
+•DB-04: Enable the pg_trgm extension and add trigram indexes on clients.full_name and case_parties.full_name for name matching.
+•DB-05: Numbering for deeds, invoices and receipts uses firm_counters with a row lock (SELECT … FOR UPDATE).
+•DB-06: All timestamps are stored in UTC (timestamptz) and shown in Asia/Colombo.
+•DB-07: Records with dependants are never hard-deleted. Deleting a client, case or invoice that is in use returns an error naming what blocks it.
+•DB-08: Schema changes go through Prisma migrations, reviewed and committed with the code.
+•DB-09: With Prisma, each request runs inside a transaction that first sets app.firm_id. Row-level security policies let every firm read rows where firm_id is null (platform defaults) but write only its own rows.
+•DB-10: Add a full-text search index on law titles, summaries and section text for LAW-03.
+•DB-11: Login security uses users.failed_login_count and users.locked_until, plus the sessions and password_reset_tokens tables. Tokens are stored hashed.
+•DB-12: Each payment gets a receipt number as RCT-YYYY-NNN per firm, generated as in DB-05.
+7. API conventions
+The API is REST over HTTPS with JSON, under the prefix /api/v1.
+•API-01: Resource routes follow one pattern: GET /cases, GET /cases/:id, POST /cases, PATCH /cases/:id, DELETE /cases/:id. Child resources nest once: GET /cases/:id/hearings.
+•API-02: List routes accept page, pageSize (default 25, maximum 100), sort and filter parameters, and return { data, page, pageSize, total }.
+•API-03: Request bodies are validated with the shared Zod schemas. Unknown fields are rejected.
+•API-04: Errors return { code, message, details } with the matching HTTP status: 400 validation, 401 not logged in, 403 no permission, 404 not found, 409 conflict, 423 firm read-only.
+•API-05: A record from another firm returns 404, never 403, so its existence is not revealed.
+•API-06: Every route is documented with Swagger at /api/docs (disabled in production). The web app's API client is generated from it.
+•API-07: Write requests carry a CSRF token. CORS allows only the web app's own origin.
+•API-08: Rate limits: 10 login attempts per IP per 10 minutes; 300 requests per user per minute elsewhere.
+Module	Base route	Main permissions
+Public site	/public/slides, /public/news, /public/contact	none
+Auth	/auth	none
+Admin: firms, plans, subscriptions, site content	/admin/firms, /admin/plans, /admin/site	platform admin only
+Laws	/laws	laws.view; admin for writes
+Firm settings, users, Drive connection	/firm, /users, /firm/drive	firm.manage
+Setup data	/courts, /case-types, /case-statuses	setup.view, setup.edit
+Dashboard	/dashboard	any firm user
+Clients	/clients	clients.view, clients.edit
+Cases	/cases	cases.view, cases.edit, cases.view_all
+Hearings, tasks, reminders	/hearings, /tasks, /reminders	diary.view, diary.edit
+Documents and templates	/documents, /templates	documents.view, documents.edit
+Deeds	/deeds	deeds.view, deeds.edit
+Billing	/time-entries, /expenses, /invoices, /payments, /client-money	billing.view, billing.edit
+Reports, export, audit log	/reports, /export, /audit-logs	reports.print, firm.export, firm.manage
+8. Security, privacy and Google Drive integration
+8.1 Security and privacy
+•SEC-01: All traffic uses HTTPS with HSTS. The database accepts connections only from the API server.
+•SEC-02: Secrets (database password, encryption keys, Google client secret, email key) come from environment variables or a secrets manager, never from the repository.
+•SEC-03: Platform staff have no route to firm client data. Support access needs the firm owner's written request, is time-limited, and is logged.
+•SEC-04: Set security headers: Content-Security-Policy, X-Content-Type-Options, Referrer-Policy and frame-ancestors none.
+•SEC-05: All database access goes through Prisma parameterised queries. Any raw SQL is reviewed.
+•SEC-06: Uploaded files are checked for type by content, not only by extension.
+•SEC-07: Database backups are encrypted, taken daily, kept for 30 days, and a restore is tested every month.
+•SEC-08: When a firm leaves, its data is exported on request and deleted from the database within 90 days.
+•SEC-09: Confirm the system's duties under the Personal Data Protection Act No. 9 of 2022 with a Sri Lankan lawyer before launch.
+8.2 Google Drive integration
+•GD-01: The firm owner connects one Google account through OAuth 2.0. The app requests only the drive.file scope, which covers files the app itself creates.
+•GD-02: The refresh token is stored encrypted with AES-256-GCM in drive_connections. Access tokens are kept in memory only.
+•GD-03: On connect, create the root folder [Firm name] - Case files and a Deeds folder, and save their IDs.
+•GD-04: Client and case folders are created on first upload and their IDs saved on the client and case rows.
+•GD-05: Uploads over 5 MB use Drive's resumable upload. Failed uploads retry 3 times with increasing delay.
+•GD-06: If the token is revoked or the Drive is full, set the connection status to error, email the firm owner, and block new uploads with a clear message.
+•GD-07: Disconnecting keeps all files in Drive and all document rows in the database. Reconnecting the same account restores access.
+•GD-08: Complete Google's OAuth app verification before launch. Check the current requirements for the scope used.
+9. Non-functional requirements
+Area	Requirement
+Performance	List and detail pages respond in under 1 second at the 95th percentile, for a firm with 5,000 cases and 50,000 documents
+Capacity	200 firms and 1,000 users at the same time on the first server size
+Availability	99.5% per month, with planned maintenance outside 8:00 AM to 6:00 PM Sri Lanka time
+Browsers	Latest two versions of Chrome, Edge, Safari and Firefox; Android Chrome and iOS Safari
+Screen sizes	Usable from 360 px wide; tables scroll sideways inside their box; touch targets at least 44 px
+Mobile priority screens	Today's hearings, add next date, case summary, new task
+Accessibility	Keyboard use throughout; labels on all inputs; text contrast of 4.5:1 or better
+Languages	All interface text in translation files; documents and PDFs support Sinhala and Tamil
+Logging	Structured API logs with a request ID; errors reported to a monitoring tool; no personal data in logs
+Testing	Unit tests for billing, numbering and permissions; API tests for each route; a test that proves one firm cannot read another firm's data
+Environments	Development, staging and production, each with its own database and Google OAuth client
+Deployment	Docker images built and tested in CI on every merge; database migrations run before the new version starts
+10. Build phases and acceptance criteria
+Each phase depends on the one before it and ends with a working, testable result.
+Phase	Requirements	Done when
+1. Foundation	AUTH, R, AUD, DB-01 to DB-03	The admin creates a firm and owner; staff log in with email code; a test proves firm A cannot read firm B
+2. Admin setup	ADM, LAW, SET	The admin sets up plans, a subscription, laws, courts, case types and statuses; an expired firm becomes read-only
+3. Clients and cases	CLI, CASE	A lawyer creates a client and case, the conflict check flags a duplicate, and history records each change
+4. Documents	GD, DOC	The owner connects Drive; an upload appears in the right Drive folder; a plaint is generated from a template
+5. Daily work	HEAR, TASK, REM, DEED	"Add next date" works on a phone; reminders arrive by email; two users creating deeds at once get different numbers
+6. Billing	BILL	Time and expenses become an invoice; a part payment updates the balance; client money balance is correct
+7. Finish	DASH, PRN, EXP, PUB	The dashboard shows correct counts; case sheet prints as PDF in Sinhala and Tamil; export ZIP downloads; home page is live
+Definition of done for every requirement
+•The permission check and firm isolation are covered by an automated test.
+•The action is written to the audit log.
+•The screen works at 360 px and 1280 px wide.
+•All text comes from translation files.
+11. Decisions
+The product owner answered the eight questions on 11 November 2026; two points remain open.
+Question	Decision	Requirement
+Email provider	Any SMTP provider, configured in environment variables	ADM-07
+SMS reminders	Not needed at launch	Section 1, REM-01
+Plans, prices, user limits	Fully customisable by the admin, with per-firm overrides	ADM-02, ADM-06
+Law library content	Full library is the goal; sample data for now, bulk import later	LAW-05, LAW-06
+Courts, case types, statuses	Each firm chooses from a starter list and adds its own	SET-04
+Default templates	Eight English templates, listed in DOC-08	DOC-08
+Invoice tax	Not known yet; built as a firm setting, off by default	BILL-09
+Product name	SimpleLawCeylon	Section 1
+Still open
+•☐ Which tax applies to legal fees, and at what rate? Confirm with an accountant before Phase 6. The system works without an answer because the setting is off by default.
+•☐ Which domain name will the site and emails use? Needed before Phase 7 and for the Google sign-in setup in Phase 4.
